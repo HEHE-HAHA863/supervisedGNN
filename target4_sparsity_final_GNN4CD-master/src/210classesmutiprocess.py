@@ -1,0 +1,108 @@
+import os
+import sys
+import subprocess
+from itertools import product
+from controlsnr import snr_objective,find_a_given_snr
+
+# 1. 获取当前PyCharm使用的Python解释器路径
+PYTHON_PATH = sys.executable
+print(f"当前Python解释器路径: {PYTHON_PATH}")
+
+import numpy as np
+from scipy.optimize import minimize_scalar
+
+# 基本参数
+N = 1000
+logN_div_N = np.log(N) / N  # ≈ 0.0069
+fixed_num_layers = 50
+J_values = [4]
+snr_list = [0.1, 0.25, 0.5, 0.75, 1, 1.5, 2]
+k_list = [2]
+total_ab = 10
+
+# 生成 param_config
+param_config = []
+
+for n_classes in k_list:
+    for s in snr_list:
+        a, b = find_a_given_snr(s, n_classes, total_ab)
+        p = round(a * logN_div_N, 4)
+        q = round(b * logN_div_N, 4)
+        for j in J_values:
+            param_config.append({
+                'n_classes': n_classes,
+                'p_SBM': p,
+                'q_SBM': q,
+                'num_layers': fixed_num_layers,
+                'c1': round(a, 4),
+                'c2': round(b, 4),
+                'j': j,
+                'target_snr': s
+            })
+
+# 固定参数
+fixed_params = {
+    'N_train': N,
+    'N_test': N,
+    'num_examples_train': 6000,
+    'num_examples_test': 100,
+    'num_features': 8
+}
+
+# 4. 运行所有实验
+for idx, config in enumerate(param_config, start=1):
+    nc = config['n_classes']
+    p = config['p_SBM']
+    q = config['q_SBM']
+    num_layers = config['num_layers']
+    j = config['j']
+    job_name = f"train_gnn_{idx}_nc{nc}_p{p}_q{q}_j{j}_nlayers{num_layers}"
+    print(f"\n▶ 开始任务 [{idx}]: {job_name}")
+    # 后续可以加入运行函数，例如 run_exp(config | fixed_params)
+
+    cmd = [
+        PYTHON_PATH,
+        "main_gnn_local_refi_final.py",
+        "--path_gnn", "",
+        "--filename_existing_gnn", "",
+        "--num_examples_train", str(fixed_params['num_examples_train']),
+        "--num_examples_test", str(fixed_params['num_examples_test']),
+        "--p_SBM", str(p),
+        "--q_SBM", str(q),
+        "--generative_model", "SBM_multiclass",
+        "--batch_size", "1",
+        "--mode", "train",
+        "--J", "2",
+        "--clip_grad_norm", "40.0",
+        "--num_features", str(fixed_params['num_features']),
+        "--num_layers", str(num_layers),
+        "--J", str(j),
+        "--N_train", "1000",
+        "--N_test", "1000",
+        "--print_freq", "1",
+        "--n_classes", str(nc),
+        "--lr", "0.004"
+    ]
+
+    # 打印执行的完整命令（调试用）
+    print("执行命令:", " ".join(cmd))
+
+    # 1. 构建子目录 logs/nclass_{nc}/
+    log_dir = os.path.join("logs", f"nclass_{nc}")
+    os.makedirs(log_dir, exist_ok=True)
+
+    # 2. 构造日志文件路径
+    out_file = os.path.join(log_dir, f"{job_name}.out")
+    err_file = os.path.join(log_dir, f"{job_name}.err")
+
+    with open(out_file, "w") as out, open(err_file, "w") as err:
+        try:
+            subprocess.run(cmd, stdout=out, stderr=err, check=True)
+            print(f"✅ 任务 {idx} 完成")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ 任务 {idx} 失败! 返回码: {e.returncode}")
+            with open(err_file, "a") as f:
+                f.write(f"\nProcess failed with return code {e.returncode}")
+
+# 5. 最终验证
+print("\n所有任务提交完成，请检查 .out 和 .err 文件")
